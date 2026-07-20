@@ -429,6 +429,7 @@ export default function THzAnalyzer() {
   const [datasets, setDatasets] = useState([]);
   const [errors, setErrors] = useState([]);
   const fileInputRef = useRef(null);
+  const fftCacheRef = useRef(new Map()); // dataset id -> { time, amplitude, settingsKey, result } — avoids recomputing FFT when only name/color/width/visibility changes
   const timeChartWrapRef = useRef(null);
   const freqChartWrapRef = useRef(null);
 
@@ -591,8 +592,8 @@ export default function THzAnalyzer() {
   }, []);
 
   const loadSamples = () => setDatasets((prev) => [...prev, ...makeSampleSet()]);
-  const clearAll = () => setDatasets([]);
-  const removeDataset = (id) => setDatasets((prev) => prev.filter((d) => d.id !== id));
+  const clearAll = () => { fftCacheRef.current.clear(); setDatasets([]); };
+  const removeDataset = (id) => { fftCacheRef.current.delete(id); setDatasets((prev) => prev.filter((d) => d.id !== id)); };
   const updateDataset = (id, patch) => setDatasets((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 
   const handleModeChange = (mode) => {
@@ -665,6 +666,7 @@ export default function THzAnalyzer() {
           time: Array.isArray(d.time) ? d.time : [],
           amplitude: Array.isArray(d.amplitude) ? d.amplitude : [],
         }));
+        fftCacheRef.current.clear();
         setDatasets(restored);
         const s = session.settings || {};
         if (s.windowType) setWindowType(s.windowType);
@@ -691,7 +693,15 @@ export default function THzAnalyzer() {
   };
 
   const processed = useMemo(() => {
+    const freqLoHi = freqDomain || DEFAULT_FREQ_DOMAIN;
+    const settingsKey = JSON.stringify([processingOpts, noiseRegion, noiseFraction, bandwidthMode, marginDB, freqLoHi[1], displayMode]);
+
     return datasets.map((d) => {
+      const cached = fftCacheRef.current.get(d.id);
+      if (cached && cached.time === d.time && cached.amplitude === d.amplitude && cached.settingsKey === settingsKey) {
+        return { ...d, ...cached.result };
+      }
+
       const { freqs, mags } = computeFFT(d.time, d.amplitude, processingOpts);
       const magsDB = toDB(mags);
       const peakIndex = findPeakIndex(mags);
@@ -718,7 +728,7 @@ export default function THzAnalyzer() {
         timeChartData.push({ x: d.time[i], y: d.amplitude[i] });
       }
 
-      const freqPlotMax = (freqDomain || DEFAULT_FREQ_DOMAIN)[1];
+      const freqPlotMax = freqLoHi[1];
       let cutoff = freqs.findIndex((f) => f > freqPlotMax);
       if (cutoff === -1) cutoff = freqs.length;
       const strideFreq = Math.max(1, Math.floor(cutoff / 1500));
@@ -728,7 +738,9 @@ export default function THzAnalyzer() {
         freqChartData.push({ x: freqs[i], y: val });
       }
 
-      return { ...d, peakFreq, peakDB, noiseFloorDB, snrDB, bw, peakToPeak, timeChartData, freqChartData };
+      const result = { peakFreq, peakDB, noiseFloorDB, snrDB, bw, peakToPeak, timeChartData, freqChartData };
+      fftCacheRef.current.set(d.id, { time: d.time, amplitude: d.amplitude, settingsKey, result });
+      return { ...d, ...result };
     });
   }, [datasets, processingOpts, noiseRegion, noiseFraction, bandwidthMode, marginDB, freqDomain, displayMode]);
 
