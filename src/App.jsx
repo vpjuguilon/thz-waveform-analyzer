@@ -247,6 +247,29 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Lets the person pick a folder and file name via the browser's native Save As dialog
+// (Chrome/Edge). Falls back to a plain auto-download (browser's default downloads folder,
+// fixed name) on browsers that don't support the File System Access API, e.g. Firefox/Safari.
+async function saveFile(blob, suggestedName, description, mimeType, extensions) {
+  if (typeof window !== 'undefined' && window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description, accept: { [mimeType]: extensions } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return false; // user cancelled the dialog — not an error
+      // Fall through to plain download if the picker itself failed for some other reason.
+    }
+  }
+  downloadBlob(blob, suggestedName);
+  return true;
+}
+
 function sanitizeSvgAttrs(el) {
   if (el.attributes) {
     for (let i = 0; i < el.attributes.length; i++) {
@@ -349,7 +372,7 @@ function exportChart(wrapRef, name, legendItems, format, onError) {
 
   if (format === 'svg') {
     const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-    downloadBlob(svgBlob, `${name}.svg`);
+    saveFile(svgBlob, `${name}.svg`, 'SVG image', 'image/svg+xml', ['.svg']);
     return;
   }
 
@@ -375,7 +398,7 @@ function exportChart(wrapRef, name, legendItems, format, onError) {
     ctx.drawImage(img, 0, 0, width, height);
     canvas.toBlob((blob) => {
       if (blob) {
-        downloadBlob(blob, `${name}.png`);
+        saveFile(blob, `${name}.png`, 'PNG image', 'image/png', ['.png']);
         return;
       }
       try {
@@ -383,7 +406,7 @@ function exportChart(wrapRef, name, legendItems, format, onError) {
         const byteStr = atob(pngDataUrl.split(',')[1]);
         const arr = new Uint8Array(byteStr.length);
         for (let i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-        downloadBlob(new Blob([arr], { type: 'image/png' }), `${name}.png`);
+        saveFile(new Blob([arr], { type: 'image/png' }), `${name}.png`, 'PNG image', 'image/png', ['.png']);
       } catch (err) {
         onError(`Couldn't render "${name}" as PNG. Try SVG export instead.`);
       }
@@ -433,7 +456,7 @@ function exportCsvGrid(header, xGrid, seriesList, filename) {
     rows.push(row);
   }
   const csv = Papa.unparse(rows);
-  downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename);
+  saveFile(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename, 'CSV file', 'text/csv', ['.csv']);
 }
 
 // ---------- UI ----------
@@ -708,7 +731,7 @@ export default function THzAnalyzer() {
       },
     };
     const json = JSON.stringify(session);
-    downloadBlob(new Blob([json], { type: 'application/json' }), 'thz_session.json');
+    saveFile(new Blob([json], { type: 'application/json' }), 'thz_session.json', 'JSON session file', 'application/json', ['.json']);
   };
 
   const loadSession = (file) => {
